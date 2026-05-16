@@ -1,0 +1,478 @@
+const express = require("express");
+const axios = require("axios");
+const fs = require("fs");
+
+const app = express();
+app.use(express.json());
+
+// ===== BOT TOKEN =====
+const TOKEN = "8664574970:AAE0_lLLeDYfynDrrYw15cBGNw11o_6TWIA";
+const API = `https://api.telegram.org/bot${TOKEN}`;
+
+// ===== OWNER =====
+const OWNER = "6079418217";
+const adminPass = "794082";
+
+// ===== SMS API =====
+let apiLink =
+  "https://mahirvai.com/sms.php?key=AM–MRXRPSh2PU&number=01XXXXXXXX&msg=XXXX";
+
+// ===== JSON FILES =====
+if (!fs.existsSync("users.json"))
+  fs.writeFileSync("users.json", "{}");
+
+if (!fs.existsSync("state.json"))
+  fs.writeFileSync("state.json", "{}");
+
+if (!fs.existsSync("codes.json"))
+  fs.writeFileSync("codes.json", "{}");
+
+if (!fs.existsSync("ban.json"))
+  fs.writeFileSync("ban.json", "{}");
+
+// ===== LOAD =====
+let users = JSON.parse(fs.readFileSync("users.json"));
+let state = JSON.parse(fs.readFileSync("state.json"));
+let codes = JSON.parse(fs.readFileSync("codes.json"));
+let banned = JSON.parse(fs.readFileSync("ban.json"));
+
+// ===== SAVE =====
+function saveAll() {
+  fs.writeFileSync("users.json", JSON.stringify(users, null, 2));
+  fs.writeFileSync("state.json", JSON.stringify(state, null, 2));
+  fs.writeFileSync("codes.json", JSON.stringify(codes, null, 2));
+  fs.writeFileSync("ban.json", JSON.stringify(banned, null, 2));
+}
+
+// ===== SEND =====
+async function send(id, text, keyboard = null) {
+  try {
+    await axios.post(`${API}/sendMessage`, {
+      chat_id: id,
+      text,
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+        ? {
+            keyboard,
+            resize_keyboard: true,
+          }
+        : undefined,
+    });
+  } catch (e) {
+    console.log(e.message);
+  }
+}
+
+// ===== HOME =====
+function home(id) {
+  state[id] = {
+    page: "home",
+  };
+
+  if (!users[id]) {
+    users[id] = {
+      coin: 0,
+      lastBonus: 0,
+    };
+  }
+
+  saveAll();
+
+  send(id, "👇 Please Select Your Choice", [
+    ["📨 Send Custom Sms"],
+    ["🎁 Gift Coin", "💌 Redeem Code"],
+    ["👤 My Account"],
+    ["🎉 Bonus", "👥 Admin Panel"],
+  ]);
+}
+
+// ===== ADMIN MENU =====
+function adminMenu(id) {
+  state[id] = {
+    page: "admin_menu",
+  };
+
+  saveAll();
+
+  send(id, "✅ Admin Panel", [
+    ["👤 User List"],
+    ["🎟 Generate Code"],
+    ["📦 Unused Codes"],
+    ["Back"],
+  ]);
+}
+
+// ===== BACK =====
+function goBack(id) {
+  home(id);
+}
+
+// ===== WEBHOOK =====
+app.post("/", async (req, res) => {
+  res.sendStatus(200);
+
+  const msg = req.body.message;
+
+  if (!msg || !msg.text) return;
+
+  const id = msg.chat.id.toString();
+  const text = msg.text.trim();
+
+  // ===== DEFAULT =====
+  if (!users[id]) {
+    users[id] = {
+      coin: 0,
+      lastBonus: 0,
+    };
+  }
+
+  if (!state[id]) {
+    state[id] = {};
+  }
+
+  // ===== START =====
+  if (text === "/start") {
+    return home(id);
+  }
+
+  // ===== BACK =====
+  if (text === "Back") {
+    return goBack(id);
+  }
+
+  // ===== BAN CHECK =====
+  if (
+    id !== OWNER &&
+    banned[id] &&
+    Date.now() < banned[id]
+  ) {
+    return send(id, "⛔ You are banned for 24 hours");
+  }
+
+  // ===== ADMIN PANEL =====
+  if (text === "👥 Admin Panel") {
+    state[id] = {
+      step: "admin_pass",
+      page: "admin_login",
+    };
+
+    saveAll();
+
+    return send(id, "🔐 Enter Admin Password:", [
+      ["Back"],
+    ]);
+  }
+
+  // ===== ADMIN PASSWORD =====
+  if (state[id].step === "admin_pass") {
+    if (text !== adminPass) {
+      if (id !== OWNER) {
+        banned[id] =
+          Date.now() + 24 * 60 * 60 * 1000;
+
+        state[id] = {};
+      }
+
+      saveAll();
+
+      return send(
+        id,
+        "❌ Wrong Password\n🚫 Banned 24 Hours"
+      );
+    }
+
+    return adminMenu(id);
+  }
+
+  // ===== USER LIST =====
+  if (
+    state[id].page === "admin_menu" &&
+    text === "👤 User List"
+  ) {
+    let list = Object.keys(users)
+      .map(
+        (u) => `${u} = ${users[u].coin} Coin`
+      )
+      .join("\n");
+
+    return send(
+      id,
+      list || "No users",
+      [["Back"]]
+    );
+  }
+
+  // ===== UNUSED CODES =====
+  if (
+    state[id].page === "admin_menu" &&
+    text === "📦 Unused Codes"
+  ) {
+    let list = Object.keys(codes)
+      .filter((c) => !codes[c].used)
+      .map(
+        (c) =>
+          `${c} = ${codes[c].coin} Coin`
+      )
+      .join("\n");
+
+    state[id].page = "unused";
+
+    saveAll();
+
+    return send(
+      id,
+      list || "No unused code",
+      [["Back"]]
+    );
+  }
+
+  // ===== GENERATE CODE =====
+  if (
+    state[id].page === "admin_menu" &&
+    text === "🎟 Generate Code"
+  ) {
+    state[id] = {
+      page: "gen_code",
+    };
+
+    saveAll();
+
+    return send(id, "Enter Coin Amount:", [
+      ["Back"],
+    ]);
+  }
+
+  if (state[id].page === "gen_code") {
+    let amount = parseInt(text);
+
+    if (!amount || amount <= 0) {
+      return send(id, "❌ Invalid Amount");
+    }
+
+    let code =
+      "TABASSUM-" +
+      Math.random()
+        .toString(36)
+        .substring(2, 6)
+        .toUpperCase();
+
+    codes[code] = {
+      coin: amount,
+      used: false,
+    };
+
+    state[id] = {
+      page: "admin_menu",
+    };
+
+    saveAll();
+
+    return send(
+      id,
+      `✅ Code Generated
+
+\`${code}\`
+
+💰 Coin: ${amount}`,
+      [["Back"]]
+    );
+  }
+
+  // ===== REDEEM =====
+  if (text === "💌 Redeem Code") {
+    state[id] = {
+      step: "redeem",
+      page: "redeem",
+    };
+
+    saveAll();
+
+    return send(id, "Enter Code:", [
+      ["Back"],
+    ]);
+  }
+
+  if (state[id].step === "redeem") {
+    let c = codes[text];
+
+    if (!c) {
+      return send(id, "❌ Invalid Code");
+    }
+
+    if (c.used) {
+      return send(id, "❌ Already Used");
+    }
+
+    users[id].coin += c.coin;
+    c.used = true;
+
+    state[id] = {};
+
+    saveAll();
+
+    return send(
+      id,
+      `✅ ${c.coin} Coin Added`
+    );
+  }
+
+  // ===== GIFT =====
+  if (text === "🎁 Gift Coin") {
+    if (users[id].coin <= 0) {
+      return send(id, "❌ No Coin");
+    }
+
+    state[id] = {
+      step: "gift",
+      page: "gift",
+    };
+
+    saveAll();
+
+    return send(id, "Enter Coin Amount:", [
+      ["Back"],
+    ]);
+  }
+
+  if (state[id].step === "gift") {
+    let amount = parseInt(text);
+
+    if (!amount || amount <= 0) {
+      return send(id, "❌ Invalid Amount");
+    }
+
+    if (users[id].coin < amount) {
+      return send(
+        id,
+        "❌ Not Enough Coin"
+      );
+    }
+
+    users[id].coin -= amount;
+
+    let code =
+      "TABASSUM-" +
+      Math.random()
+        .toString(36)
+        .substring(2, 6)
+        .toUpperCase();
+
+    codes[code] = {
+      coin: amount,
+      used: false,
+    };
+
+    state[id] = {};
+
+    saveAll();
+
+    return send(
+      id,
+      `🎁 YOUR CODE
+
+\`${code}\`
+
+💰 Coin: ${amount}`
+    );
+  }
+
+  // ===== ACCOUNT =====
+  if (text === "👤 My Account") {
+    return send(
+      id,
+      `👤 ID: ${id}
+💰 Balance: ${users[id].coin}`
+    );
+  }
+
+  // ===== BONUS =====
+  if (text === "🎉 Bonus") {
+    let now = Date.now();
+
+    if (
+      now - users[id].lastBonus <
+      86400000
+    ) {
+      return send(
+        id,
+        "⏳ Already Claimed"
+      );
+    }
+
+    users[id].lastBonus = now;
+    users[id].coin += 1;
+
+    saveAll();
+
+    return send(id, "🎉 Bonus Added");
+  }
+
+  // ===== SMS =====
+  if (text === "📨 Send Custom Sms") {
+    state[id] = {
+      step: "num",
+      page: "sms",
+    };
+
+    saveAll();
+
+    return send(id, "Enter Number:", [
+      ["Back"],
+    ]);
+  }
+
+  // ===== NUMBER =====
+  if (state[id].step === "num") {
+    state[id].number = text;
+    state[id].step = "msg";
+
+    saveAll();
+
+    return send(id, "Enter Message:", [
+      ["Back"],
+    ]);
+  }
+
+  // ===== MESSAGE =====
+  if (state[id].step === "msg") {
+    if (users[id].coin <= 0) {
+      return send(id, "❌ No Coin");
+    }
+
+    let url = apiLink
+      .replace(
+        "01XXXXXXXX",
+        state[id].number
+      )
+      .replace(
+        "XXXX",
+        encodeURIComponent(text)
+      );
+
+    try {
+      await axios.get(url);
+
+      users[id].coin--;
+
+      state[id] = {};
+
+      saveAll();
+
+      return send(id, "✅ SMS Sent");
+    } catch {
+      return send(
+        id,
+        "❌ API Error"
+      );
+    }
+  }
+});
+
+// ===== SERVER =====
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(
+    `Bot Running On Port ${PORT}`
+  );
+});
